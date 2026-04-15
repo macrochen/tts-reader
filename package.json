@@ -1,0 +1,32 @@
+{
+  "name": "tts-reader",
+  "version": "1.0.0",
+  "description": "本地文字朗读器 - Edge TTS 高质量语音",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "build:dir": "electron-builder --mac --dir",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.tts-reader.app",
+    "productName": "朗读器",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "icon.png",
+      "target": ["dmg", "zip"]
+    },
+    "files": [
+      "**/*",
+      "!node_modules",
+      "!*.md"
+    ],
+    "extraResources": []
+  }
+}
