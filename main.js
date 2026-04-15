@@ -28,11 +28,13 @@ function createTempSpeechFiles(prefix = 'audio') {
   const id = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   return {
     audioFile: path.join(tempDir, `${prefix}_${id}.mp3`),
-    subtitleFile: path.join(tempDir, `${prefix}_${id}.srt`)
+    subtitleFile: path.join(tempDir, `${prefix}_${id}.srt`),
+    metadataFile: path.join(tempDir, `${prefix}_${id}.json`),
+    textFile: path.join(tempDir, `${prefix}_${id}.txt`)
   };
 }
 
-function rememberAudioCache(cacheKey, audioFile, subtitleFile, subtitles) {
+function rememberAudioCache(cacheKey, audioFile, subtitleFile, subtitles, wordBoundaries = []) {
   if (audioCache.size >= MAX_CACHE_SIZE) {
     const firstKey = audioCache.keys().next().value;
     const oldCached = audioCache.get(firstKey);
@@ -48,7 +50,8 @@ function rememberAudioCache(cacheKey, audioFile, subtitleFile, subtitles) {
   audioCache.set(cacheKey, {
     audioFile,
     subtitleFile,
-    subtitles
+    subtitles,
+    wordBoundaries
   });
 }
 
@@ -71,6 +74,7 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
       return Promise.resolve({
         audioUrl: `file://${cached.audioFile}`,
         subtitles: cached.subtitles,
+        wordBoundaries: cached.wordBoundaries || [],
         audioFile: cached.audioFile,
         subtitleFile: cached.subtitleFile,
         fromCache: true
@@ -80,9 +84,20 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
     audioCache.delete(cacheKey);
   }
 
-  const { audioFile, subtitleFile } = createTempSpeechFiles(prefix);
+  const { audioFile, subtitleFile, metadataFile, textFile } = createTempSpeechFiles(prefix);
   const volumeStr = volume >= 0 ? `+${volume}%` : `${volume}%`;
-  const args = [
+  fs.writeFileSync(textFile, text, 'utf-8');
+
+  const pythonScript = path.join(__dirname, 'scripts', 'edge_tts_word_boundary.py');
+  const wordBoundaryArgs = [
+    pythonScript,
+    '--text-file', textFile,
+    '--voice', voice,
+    '--volume', volumeStr,
+    '--write-media', audioFile,
+    '--write-metadata', metadataFile
+  ];
+  const cliArgs = [
     '--voice', voice,
     '--rate=+0%',
     `--volume=${volumeStr}`,
@@ -94,20 +109,44 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
   console.log('🎤 生成语音 chunk:', `${text.length} chars`, cacheKey);
 
   return new Promise((resolve, reject) => {
-    execFile('edge-tts', args, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+    execFile('python3', wordBoundaryArgs, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
       if (error) {
-        console.error('edge-tts 错误:', stderr);
-        reject(new Error('语音生成失败: ' + stderr));
+        console.error('WordBoundary 生成失败，回退到 CLI 字幕:', stderr);
+        execFile('edge-tts', cliArgs, { maxBuffer: 1024 * 1024 * 10 }, (fallbackError, fallbackStdout, fallbackStderr) => {
+          if (fallbackError) {
+            console.error('edge-tts 错误:', fallbackStderr);
+            reject(new Error('语音生成失败: ' + fallbackStderr));
+            return;
+          }
+
+          const subtitles = readSubtitles(subtitleFile);
+          rememberAudioCache(cacheKey, audioFile, subtitleFile, subtitles, []);
+
+          resolve({
+            audioUrl: `file://${audioFile}`,
+            subtitles,
+            wordBoundaries: [],
+            audioFile,
+            subtitleFile,
+            fromCache: false
+          });
+        });
         return;
       }
 
-      const subtitles = readSubtitles(subtitleFile);
-      rememberAudioCache(cacheKey, audioFile, subtitleFile, subtitles);
+      let wordBoundaries = [];
+      if (fs.existsSync(metadataFile)) {
+        const metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf-8'));
+        wordBoundaries = metadata.wordBoundaries || [];
+      }
+      fs.writeFileSync(subtitleFile, '', 'utf-8');
+      rememberAudioCache(cacheKey, audioFile, subtitleFile, [], wordBoundaries);
 
       console.log('✅ 语音 chunk 生成完成:', cacheKey);
       resolve({
         audioUrl: `file://${audioFile}`,
-        subtitles,
+        subtitles: [],
+        wordBoundaries,
         audioFile,
         subtitleFile,
         fromCache: false

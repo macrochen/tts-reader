@@ -19,14 +19,12 @@
     "productName": "朗读器",
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "icon.png",
       "target": ["dmg", "zip"]
     },
     "files": [
       "**/*",
       "!node_modules",
       "!*.md"
-    ],
-    "extraResources": []
+    ]
   }
 }

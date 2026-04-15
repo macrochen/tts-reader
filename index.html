@@ -151,6 +151,7 @@
             flex: 1;
             overflow: auto;
             padding: 16px;
+            overflow-anchor: none;
         }
 
         #inputText {
@@ -228,11 +229,21 @@
         /* 高亮样式 */
         .highlight-overlay {
             position: absolute;
+            pointer-events: none;
+            z-index: 10;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            overflow-anchor: none;
+        }
+
+        .highlight-segment {
+            position: absolute;
             background: rgba(255, 230, 0, 0.4);
             border-radius: 3px;
             pointer-events: none;
-            z-index: 10;
-            transition: all 0.2s ease;
+            transition: all 0.15s ease;
         }
 
         /* 进度条 */

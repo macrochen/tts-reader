@@ -4,7 +4,8 @@ const test = require('node:test');
 const {
   parseSubtitleContent,
   findActiveSubtitleIndex,
-  alignSubtitleCuesToSentences
+  alignSubtitleCuesToSentences,
+  buildSentenceCuesFromWordBoundaries
 } = require('../src/subtitles');
 
 test('parseSubtitleContent parses SRT timestamps with comma milliseconds', () => {
@@ -58,6 +59,17 @@ test('findActiveSubtitleIndex returns the cue active at a given playback time', 
   assert.equal(findActiveSubtitleIndex(cues, 4), 2);
 });
 
+test('findActiveSubtitleIndex keeps the previous cue during pauses between cues', () => {
+  const cues = [
+    { start: 0.1, end: 1.0, text: '第一句。' },
+    { start: 1.8, end: 2.5, text: '第二句。' },
+    { start: 3.2, end: 4.0, text: '第三句。' }
+  ];
+
+  assert.equal(findActiveSubtitleIndex(cues, 1.4), 0);
+  assert.equal(findActiveSubtitleIndex(cues, 2.9), 1);
+});
+
 test('alignSubtitleCuesToSentences keeps multiple cues inside the same sentence', () => {
   const sentences = [
     { index: 10, text: '第一句很长，里面有逗号，也有停顿。' },
@@ -80,4 +92,31 @@ test('alignSubtitleCuesToSentences keeps multiple cues inside the same sentence'
   const aligned = alignSubtitleCuesToSentences(cues, sentences, chunk);
 
   assert.deepEqual(aligned, [10, 10, 10, 11, 12]);
+});
+
+test('buildSentenceCuesFromWordBoundaries aggregates word timings into sentence cues', () => {
+  const sentences = [
+    { index: 0, text: '第一句很长。' },
+    { index: 1, text: '第二句来了。' }
+  ];
+  const chunk = {
+    sentenceStartIndex: 0,
+    sentenceEndIndex: 1,
+    text: '第一句很长。第二句来了。'
+  };
+  const words = [
+    { start: 0.1, end: 0.4, text: '第一' },
+    { start: 0.4, end: 0.7, text: '句' },
+    { start: 0.7, end: 1.2, text: '很长' },
+    { start: 1.8, end: 2.2, text: '第二' },
+    { start: 2.2, end: 2.5, text: '句' },
+    { start: 2.5, end: 3.0, text: '来了' }
+  ];
+
+  const sentenceCues = buildSentenceCuesFromWordBoundaries(words, sentences, chunk);
+
+  assert.deepEqual(sentenceCues, [
+    { sentenceIndex: 0, start: 0.1, end: 1.2, text: '第一句很长。' },
+    { sentenceIndex: 1, start: 1.8, end: 3.0, text: '第二句来了。' }
+  ]);
 });

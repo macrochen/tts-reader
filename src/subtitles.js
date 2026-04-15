@@ -79,15 +79,20 @@ function findActiveSubtitleIndex(cues, currentTime) {
     return -1;
   }
 
+  if (currentTime < cues[0].start) {
+    return 0;
+  }
+
   for (let i = 0; i < cues.length; i += 1) {
     const cue = cues[i];
     if (currentTime >= cue.start && currentTime < cue.end) {
       return i;
     }
-  }
 
-  if (currentTime < cues[0].start) {
-    return 0;
+    const nextCue = cues[i + 1];
+    if (nextCue && currentTime >= cue.end && currentTime < nextCue.start) {
+      return i;
+    }
   }
 
   return cues.length - 1;
@@ -145,9 +150,97 @@ function alignSubtitleCuesToSentences(cues, sentences, chunk) {
   });
 }
 
+function getChunkSentences(sentences, chunk) {
+  if (!Array.isArray(sentences) || !chunk) {
+    return [];
+  }
+
+  return sentences.filter((sentence) => (
+    sentence.index >= chunk.sentenceStartIndex &&
+    sentence.index <= chunk.sentenceEndIndex
+  ));
+}
+
+function getSentenceTextRanges(chunkSentences) {
+  const ranges = [];
+  let offset = 0;
+
+  for (const sentence of chunkSentences) {
+    const start = offset;
+    offset += sentence.text.length;
+    ranges.push({
+      start,
+      end: offset,
+      sentence
+    });
+  }
+
+  return ranges;
+}
+
+function findRangeForOffset(ranges, offset) {
+  return ranges.find((range) => offset >= range.start && offset < range.end) || null;
+}
+
+function buildSentenceCuesFromWordBoundaries(wordBoundaries, sentences, chunk) {
+  if (!Array.isArray(wordBoundaries) || wordBoundaries.length === 0) {
+    return [];
+  }
+
+  const chunkSentences = getChunkSentences(sentences, chunk);
+  if (chunkSentences.length === 0) {
+    return [];
+  }
+
+  const ranges = getSentenceTextRanges(chunkSentences);
+  const chunkText = chunk.text || chunkSentences.map((sentence) => sentence.text).join('');
+  const cueBySentence = new Map();
+  let searchCursor = 0;
+
+  for (const word of wordBoundaries) {
+    const wordText = String(word.text || '').trim();
+    if (!wordText) {
+      continue;
+    }
+
+    let wordOffset = chunkText.indexOf(wordText, searchCursor);
+    if (wordOffset === -1) {
+      wordOffset = chunkText.indexOf(wordText);
+    }
+
+    if (wordOffset === -1) {
+      continue;
+    }
+
+    const range = findRangeForOffset(ranges, wordOffset);
+    if (!range) {
+      continue;
+    }
+
+    const existing = cueBySentence.get(range.sentence.index);
+    if (existing) {
+      existing.end = Math.max(existing.end, word.end);
+    } else {
+      cueBySentence.set(range.sentence.index, {
+        sentenceIndex: range.sentence.index,
+        start: word.start,
+        end: word.end,
+        text: range.sentence.text
+      });
+    }
+
+    searchCursor = Math.max(searchCursor, wordOffset + wordText.length);
+  }
+
+  return chunkSentences
+    .map((sentence) => cueBySentence.get(sentence.index))
+    .filter(Boolean);
+}
+
 module.exports = {
   parseTimecode,
   parseSubtitleContent,
   findActiveSubtitleIndex,
-  alignSubtitleCuesToSentences
+  alignSubtitleCuesToSentences,
+  buildSentenceCuesFromWordBoundaries
 };

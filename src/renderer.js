@@ -1,8 +1,13 @@
 'use strict';
 
 const { ipcRenderer } = require('electron');
+const { getStableScrollTop } = require('./scrollSync');
 const { buildTextPlan } = require('./textPipeline');
-const { alignSubtitleCuesToSentences, findActiveSubtitleIndex } = require('./subtitles');
+const {
+  alignSubtitleCuesToSentences,
+  buildSentenceCuesFromWordBoundaries,
+  findActiveSubtitleIndex
+} = require('./subtitles');
 
 const MAX_CHUNK_CHARS = 1200;
 const PREFETCH_AHEAD = 2;
@@ -27,6 +32,7 @@ let playbackPlan = null;
 let chunkResults = new Map();
 let chunkPromises = new Map();
 let currentChunkIndex = -1;
+let pendingScrollFrame = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (window.marked) {
@@ -354,8 +360,9 @@ async function handleChunkEnded(sessionId) {
 function startSyncForChunk(result) {
   stopSync();
 
-  const { chunk, subtitles = [] } = result;
+  const { chunk, subtitles = [], wordBoundaries = [] } = result;
   const sentenceCount = chunk.sentenceEndIndex - chunk.sentenceStartIndex + 1;
+  const sentenceCues = buildSentenceCuesFromWordBoundaries(wordBoundaries, playbackPlan.sentences, chunk);
   const cueSentenceIndexes = alignSubtitleCuesToSentences(subtitles, playbackPlan.sentences, chunk);
   let lastHighlightedIndex = -1;
 
@@ -370,6 +377,7 @@ function startSyncForChunk(result) {
     const progress = duration > 0 ? Math.min(1, audio.currentTime / duration) : 0;
     const globalSentenceIndex = getGlobalSentenceIndexForTime(
       chunk,
+      sentenceCues,
       subtitles,
       cueSentenceIndexes,
       audio.currentTime,
@@ -378,8 +386,9 @@ function startSyncForChunk(result) {
     );
 
     if (globalSentenceIndex !== lastHighlightedIndex) {
-      lastHighlightedIndex = globalSentenceIndex;
-      highlightCurrentSentence(globalSentenceIndex);
+      if (highlightCurrentSentence(globalSentenceIndex)) {
+        lastHighlightedIndex = globalSentenceIndex;
+      }
     }
 
     updateProgress(chunk.index, progress);
@@ -389,9 +398,16 @@ function startSyncForChunk(result) {
   syncInterval = setInterval(tick, 50);
 }
 
-function getGlobalSentenceIndexForTime(chunk, subtitles, cueSentenceIndexes, currentTime, progress, sentenceCount) {
+function getGlobalSentenceIndexForTime(chunk, sentenceCues, subtitles, cueSentenceIndexes, currentTime, progress, sentenceCount) {
   if (sentenceCount <= 1) {
     return chunk.sentenceStartIndex;
+  }
+
+  if (Array.isArray(sentenceCues) && sentenceCues.length > 0) {
+    const sentenceCueIndex = findActiveSubtitleIndex(sentenceCues, currentTime);
+    if (sentenceCues[sentenceCueIndex]) {
+      return sentenceCues[sentenceCueIndex].sentenceIndex;
+    }
   }
 
   if (Array.isArray(subtitles) && subtitles.length > 0) {
@@ -423,15 +439,14 @@ function updateProgress(chunkIndex, localProgress) {
 
 function highlightCurrentSentence(sentenceIndex) {
   if (sentenceIndex < 0 || sentenceIndex >= sentenceSegments.length) {
-    return;
+    return false;
   }
 
   if (sentenceIndex === currentSentenceIndex) {
-    return;
+    return true;
   }
 
   clearHighlights();
-  currentSentenceIndex = sentenceIndex;
 
   const outputDiv = document.getElementById('outputText');
   const overlay = document.getElementById('highlightOverlay');
@@ -440,33 +455,73 @@ function highlightCurrentSentence(sentenceIndex) {
 
   if (!position) {
     overlay.style.display = 'none';
-    return;
+    return false;
   }
 
   const range = createRangeFromTextOffsets(outputDiv, position.start, position.end);
   if (!range) {
     overlay.style.display = 'none';
-    return;
+    return false;
   }
 
-  const rect = range.getBoundingClientRect();
+  const rects = Array.from(range.getClientRects())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
   const panelRect = panelContent.getBoundingClientRect();
 
-  if (rect.width <= 0 || rect.height <= 0) {
+  if (rects.length === 0) {
     overlay.style.display = 'none';
-    return;
+    return false;
   }
 
   overlay.style.display = 'block';
-  overlay.style.left = `${rect.left - panelRect.left + panelContent.scrollLeft}px`;
-  overlay.style.top = `${rect.top - panelRect.top + panelContent.scrollTop}px`;
-  overlay.style.width = `${rect.width}px`;
-  overlay.style.height = `${rect.height}px`;
+  overlay.innerHTML = '';
+  overlay.style.width = `${panelContent.scrollWidth}px`;
+  overlay.style.height = `${panelContent.scrollHeight}px`;
+  for (const rect of rects) {
+    const segment = document.createElement('div');
+    segment.className = 'highlight-segment';
+    segment.style.left = `${rect.left - panelRect.left + panelContent.scrollLeft}px`;
+    segment.style.top = `${rect.top - panelRect.top + panelContent.scrollTop}px`;
+    segment.style.width = `${rect.width}px`;
+    segment.style.height = `${rect.height}px`;
+    overlay.appendChild(segment);
+  }
 
-  const targetTop = rect.top - panelRect.top + panelContent.scrollTop - panelContent.clientHeight * 0.35;
-  panelContent.scrollTo({
-    top: Math.max(0, targetTop),
-    behavior: 'smooth'
+  currentSentenceIndex = sentenceIndex;
+
+  const firstRect = rects[0];
+  const lastRect = rects[rects.length - 1];
+  scheduleStableScroll(panelContent, panelRect, firstRect, lastRect);
+
+  return true;
+}
+
+function scheduleStableScroll(panelContent, panelRect, firstRect, lastRect) {
+  if (pendingScrollFrame) {
+    cancelAnimationFrame(pendingScrollFrame);
+  }
+
+  const targetTop = firstRect.top - panelRect.top + panelContent.scrollTop;
+  const targetHeight = (lastRect.top + lastRect.height) - firstRect.top;
+
+  pendingScrollFrame = requestAnimationFrame(() => {
+    pendingScrollFrame = null;
+    const nextScrollTop = getStableScrollTop({
+      currentScrollTop: panelContent.scrollTop,
+      viewportHeight: panelContent.clientHeight,
+      contentHeight: panelContent.scrollHeight,
+      targetTop,
+      targetHeight
+    });
+
+    if (nextScrollTop === null) {
+      return;
+    }
+
+    panelContent.scrollTo({
+      top: nextScrollTop,
+      behavior: 'auto'
+    });
   });
 }
 
@@ -502,6 +557,12 @@ function clearHighlights() {
   const overlay = document.getElementById('highlightOverlay');
   if (overlay) {
     overlay.style.display = 'none';
+    overlay.innerHTML = '';
+  }
+
+  if (pendingScrollFrame) {
+    cancelAnimationFrame(pendingScrollFrame);
+    pendingScrollFrame = null;
   }
 }
 
