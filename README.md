@@ -4,32 +4,55 @@
 
 ## 功能特点
 
-- ✅ 支持 Markdown 输入，实时预览
+- ✅ 支持 Markdown 输入，实时预览（保留原有格式）
 - ✅ Edge TTS 高质量语音（晓晓、云希、云扬等）
 - ✅ 逐句高亮，同步朗读
-- ✅ 语速调节（-50% ~ +100%）
+- ✅ 语速调节（0.5x ~ 3x）
 - ✅ 音量调节
 - ✅ 语音选择（30+ 中文语音）
 - ✅ 剪贴板一键粘贴
-- ✅ 进度显示
-
-## 安装要求
-
-1. **Node.js** - https://nodejs.org/
-2. **Python 3** - 系统自带或 https://www.python.org/
-3. **edge-tts** - 自动安装（首次运行需要网络）
+- ✅ 音频缓存（相同内容不重复生成）
+- ✅ 可打包成 macOS .app 双击启动
 
 ## 快速开始
 
+### 方式一：直接运行应用（推荐）
+
+1. 从 [Releases](https://github.com/macrochen/tts-reader/releases) 下载 `朗读器-x.x.x-arm64.dmg`
+2. 双击 DMG 文件，将「朗读器」拖到 Applications 文件夹
+3. 在启动台找到「朗读器」，双击启动
+
+### 方式二：命令行启动
+
 ```bash
-# 克隆或下载项目
-cd tts-reader-electron
+# 克隆项目
+git clone https://github.com/macrochen/tts-reader.git
+cd tts-reader
 
 # 安装依赖
 npm install
 
+# 安装 edge-tts
+pip3 install edge-tts
+
 # 启动应用
 npm start
+```
+
+### 方式三：自己打包
+
+```bash
+# 克隆并安装
+git clone https://github.com/macrochen/tts-reader.git
+cd tts-reader
+npm install
+pip3 install edge-tts
+
+# 打包成 macOS 应用
+npm run build
+
+# 应用在 dist/ 目录
+open dist/mac-arm64/朗读器.app
 ```
 
 ## 使用方法
