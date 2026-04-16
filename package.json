@@ -22,9 +22,27 @@
       "target": ["dmg", "zip"]
     },
     "files": [
-      "**/*",
+      "main.js",
+      "index.html",
+      "package.json",
+      "src/**/*",
       "!node_modules",
-      "!*.md"
+      "!tests",
+      "!scripts",
+      "!docs",
+      "!*.md",
+      "!.gitignore"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
     ]
   }
 }

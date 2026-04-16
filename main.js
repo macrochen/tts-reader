@@ -17,11 +17,43 @@ if (!fs.existsSync(tempDir)) {
 // 音频缓存（内存缓存）
 const audioCache = new Map();
 const MAX_CACHE_SIZE = 50;  // 最多缓存 50 个音频
+const EXTRA_BIN_PATHS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
 
 // 生成缓存键（不包含语速，语速由 playbackRate 调整）
 function getCacheKey(text, voice, volume) {
   const content = `${text}|${voice}|${volume}`;
   return crypto.createHash('md5').update(content).digest('hex');
+}
+
+function getChildProcessEnv() {
+  const currentPath = process.env.PATH || '';
+  const pathParts = currentPath.split(path.delimiter).filter(Boolean);
+  for (const binPath of EXTRA_BIN_PATHS) {
+    if (!pathParts.includes(binPath)) {
+      pathParts.push(binPath);
+    }
+  }
+
+  return {
+    ...process.env,
+    PATH: pathParts.join(path.delimiter)
+  };
+}
+
+function resolveExecutable(name) {
+  for (const binPath of EXTRA_BIN_PATHS) {
+    const candidate = path.join(binPath, name);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return name;
+}
+
+function formatProcessError(prefix, error, stderr) {
+  const detail = (stderr && stderr.trim()) || (error && error.message) || '未知错误';
+  return `${prefix}: ${detail}`;
 }
 
 function createTempSpeechFiles(prefix = 'audio') {
@@ -88,7 +120,8 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
   const volumeStr = volume >= 0 ? `+${volume}%` : `${volume}%`;
   fs.writeFileSync(textFile, text, 'utf-8');
 
-  const pythonScript = path.join(__dirname, 'scripts', 'edge_tts_word_boundary.py');
+  const resourceRoot = app.isPackaged ? process.resourcesPath : __dirname;
+  const pythonScript = path.join(resourceRoot, 'scripts', 'edge_tts_word_boundary.py');
   const wordBoundaryArgs = [
     pythonScript,
     '--text-file', textFile,
@@ -109,13 +142,20 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
   console.log('🎤 生成语音 chunk:', `${text.length} chars`, cacheKey);
 
   return new Promise((resolve, reject) => {
-    execFile('python3', wordBoundaryArgs, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+    execFile(resolveExecutable('python3'), wordBoundaryArgs, {
+      env: getChildProcessEnv(),
+      maxBuffer: 1024 * 1024 * 10
+    }, (error, stdout, stderr) => {
       if (error) {
-        console.error('WordBoundary 生成失败，回退到 CLI 字幕:', stderr);
-        execFile('edge-tts', cliArgs, { maxBuffer: 1024 * 1024 * 10 }, (fallbackError, fallbackStdout, fallbackStderr) => {
+        console.error(formatProcessError('WordBoundary 生成失败，回退到 CLI 字幕', error, stderr));
+        execFile(resolveExecutable('edge-tts'), cliArgs, {
+          env: getChildProcessEnv(),
+          maxBuffer: 1024 * 1024 * 10
+        }, (fallbackError, fallbackStdout, fallbackStderr) => {
           if (fallbackError) {
-            console.error('edge-tts 错误:', fallbackStderr);
-            reject(new Error('语音生成失败: ' + fallbackStderr));
+            const message = formatProcessError('语音生成失败', fallbackError, fallbackStderr);
+            console.error(message);
+            reject(new Error(message));
             return;
           }
 
@@ -156,6 +196,16 @@ function generateSpeechWithExecFile({ text, voice, volume, prefix = 'audio' }) {
 }
 
 function createWindow() {
+  if (!app.isReady()) {
+    app.whenReady().then(createWindow);
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.focus();
+    return;
+  }
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -170,6 +220,9 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
   
   // 开发时打开开发者工具
   // mainWindow.webContents.openDevTools();
@@ -186,7 +239,7 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
+    app.whenReady().then(createWindow);
   }
 });
 
@@ -207,9 +260,12 @@ function cleanupTempFiles() {
 // 获取可用语音列表
 ipcMain.handle('get-voices', async () => {
   return new Promise((resolve, reject) => {
-    exec('edge-tts --list-voices', (error, stdout, stderr) => {
+    execFile(resolveExecutable('edge-tts'), ['--list-voices'], {
+      env: getChildProcessEnv(),
+      maxBuffer: 1024 * 1024 * 10
+    }, (error, stdout, stderr) => {
       if (error) {
-        reject(error);
+        reject(new Error(formatProcessError('加载语音失败', error, stderr)));
         return;
       }
       
